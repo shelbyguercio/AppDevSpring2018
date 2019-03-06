@@ -1,0 +1,108 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun April 29 13:19:42 2018
+
+@author: Shelby Guercio
+"""
+from __future__ import absolute_import, division, print_function
+from builtins import *
+
+##########import packages & set work environment"""
+import arcpy
+import geopandas as gpd
+import math #this is used to calculate the Polsby Popper score
+from matplotlib import pyplot as pp
+import os
+import pysal #this is used to create the choropleth map
+import urllib2
+from zipfile import ZipFile
+
+arcpy.env.workspace = "C:\CongressionalDistricts"
+outDir = "C:\CongressionalDistricts"
+arcpy.env.overwriteOutput = "TRUE"
+
+######## run the chunks of code in between big ##### all together
+
+###########download data on 2011 congressional districts
+url2011 = urllib2.urlopen("http://aws.redistricting.state.pa.us/Redistricting/Resources\
+                          /GISData/Districts/Congressional/2011/SHAPE/\
+                          PA-Congressional-Districts-2011.zip")  
+dl2011 = url2011.read()
+
+# write temp file location
+with open("temp.zip", 'wb') as files:  
+    files.write(dl2011)
+
+zip2011 = ZipFile("temp.zip")
+zip2011.extractall()
+
+#remove files you no longer need
+del(zip2011) 
+os.unlink("temp.zip")
+
+##############download data on 2018 congressional districts following the same format as 2011
+url2018 = urllib2.urlopen("http://www.pacourts.us/assets/files/setting-6061/file-6845.zip")  
+dl2018 = url2018.read()
+with open("temp.zip", 'wb') as files:  
+    files.write(dl2018)
+zip2018 = ZipFile("temp.zip")
+zip2018.extractall()
+
+del(zip2018)
+os.unlink("temp.zip")
+
+############check shapefile projections
+shapes = arcpy.ListFeatureClasses()
+for shp in shapes:
+    crs = arcpy.Describe(shp).spatialReference
+    print('{0}:{1}.'.format(shp, crs.name))
+
+########### reproject both shapefiles into Albers Equal Area Conic 
+###########because Albers has a low maximum scale distortion
+    
+albers = []    
+    
+for shp in shapes:
+    infile = shp
+    outfile = os.path.splitext(shp)[0] + "Albers.shp"   
+    outcrs = arcpy.SpatialReference("USA Contiguous Albers Equal Area Conic")
+    arcpy.Project_management(infile, outfile, outcrs)
+    albers.append(outfile)
+
+print(albers)
+
+########## add fields for polsby analysis ur about to do
+
+for shp in albers:
+    arcpy.AddField_management(shp, "polsby", "FLOAT")
+    arcpy.AddField_management(shp, "polsarea", "FLOAT")
+    arcpy.AddField_management(shp, "polsperi", "FLOAT")
+
+########## iterate through each district in each year to calculate perimeter and area (this will populate the fields created above)
+
+for shp in albers:
+    arcpy.CalculateField_management(shp, "polsarea", "!SHAPE.AREA@SQUAREMILES!", "PYTHON_9.3")
+    arcpy.CalculateField_management(shp, "polsperi", "!SHAPE.LENGTH@MILES!", "PYTHON_9.3")
+
+######### calculate Polsby Popper score using area and perimeter
+
+for shp in albers:
+    arcpy.CalculateField_management(
+            shp, 'polsby', "(4 * math.pi * !polsarea!) / (!polsperi!**2)", "PYTHON_9.3")
+
+########### use geopandas to map the PP scores and save images to file
+pp1 = albers[0]
+map1 = gpd.read_file(pp1)
+ax = map1.plot(column='polsby', cmap="YlOrBr", scheme="equal_interval", legend=True, edgecolor = 'black')
+ax.set_title("PA Congressional Districts 2011 - Polsby Popper Score")
+ax.get_legend().set_bbox_to_anchor((1, 0.4))
+map1.head()
+pp.savefig('2011.png', bbox_inches='tight')
+
+pp2 = albers[1]
+map2 = gpd.read_file(pp2)
+ax = map2.plot(column='polsby', cmap="YlOrBr", scheme="equal_interval", legend=True, edgecolor = 'black')
+ax.set_title("PA Congressional Districts 2018 - Polsby Popper Score")
+ax.get_legend().set_bbox_to_anchor((1, 0.4))
+map2.head()
+pp.savefig('2018.png', bbox_inches='tight')
